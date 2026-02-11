@@ -118,7 +118,7 @@ export function PartyScoreboard({ parties, totalSeats = 300 }: Props) {
             background: rgba(255,255,255,0.03);
             border-radius: 8px;
         }
-        .party-info { display: flex; alignItems: center; gap: 12px; }
+        .party-info { display: flex; align-items: center; gap: 12px; }
         .party-dot { width: 12px; height: 12px; border-radius: 50%; }
         .party-names { display: flex; flex-direction: column; }
         .party-short { font-weight: 700; font-size: 0.9rem; }

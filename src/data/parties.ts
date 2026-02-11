@@ -10,7 +10,7 @@ export const PARTIES: Party[] = [
         seatsWon: 0,
         seatsLeading: 0,
         totalVotes: 0,
-        totalCandidates: 292,
+        totalCandidates: 288,
         alliance: 'bnp_alliance',
     },
     {
@@ -22,7 +22,7 @@ export const PARTIES: Party[] = [
         seatsWon: 0,
         seatsLeading: 0,
         totalVotes: 0,
-        totalCandidates: 179,
+        totalCandidates: 224,
         alliance: 'jamaat_alliance',
     },
     {
@@ -46,7 +46,7 @@ export const PARTIES: Party[] = [
         seatsWon: 0,
         seatsLeading: 0,
         totalVotes: 0,
-        totalCandidates: 253,
+        totalCandidates: 259,
         alliance: 'independent',
     },
     {

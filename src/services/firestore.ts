@@ -84,6 +84,19 @@ export function onSystemStatusChange(callback: (data: SystemStatus) => void) {
     return onSnapshot(ref, (snapshot) => {
         if (snapshot.exists()) {
             callback(snapshot.data() as SystemStatus);
+        } else {
+            // Provide defaults when doc doesn't exist yet
+            callback({
+                isCollecting: false,
+                lastFetchTime: 0,
+                nextFetchTime: 0,
+                totalApiCalls: 0,
+                apiCallsToday: 0,
+                errorsToday: 0,
+                seatsDeclared: 0,
+                seatsTotal: 300,
+                collectionPhase: 'pre_voting',
+            });
         }
     });
 }
@@ -107,6 +120,7 @@ export function onElectionSummaryChange(callback: (data: ElectionSummary) => voi
         if (snapshot.exists()) {
             callback(snapshot.data() as ElectionSummary);
         }
+        // When doc doesn't exist, don't call back — Home.tsx already has a default
     });
 }
 
@@ -135,6 +149,7 @@ export function onReferendumChange(callback: (data: ReferendumResult) => void) {
         if (snapshot.exists()) {
             callback(snapshot.data() as ReferendumResult);
         }
+        // When doc doesn't exist, leave referendum as undefined — tracker hides itself
     });
 }
 

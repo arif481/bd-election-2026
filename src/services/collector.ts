@@ -22,13 +22,13 @@ function getBSTHour(): number {
 
 export function getCollectionPhase(): SystemStatus['collectionPhase'] {
     const hour = getBSTHour();
+    const minutes = new Date().getUTCMinutes();
 
-    if (hour < 7 || (hour === 7 && new Date().getUTCMinutes() < 30)) return 'pre_voting';
-    if (hour < 16 || (hour === 16 && new Date().getUTCMinutes() < 30)) return 'voting';
+    if (hour < 7 || (hour === 7 && minutes < 30)) return 'pre_voting';
+    if (hour < 16 || (hour === 16 && minutes < 30)) return 'voting';
     if (hour < 19) return 'early_results';
-    if (hour < 24) return 'peak_results';
-    if (hour < 8) return 'late_results';
-    return 'cleanup';
+    if (hour < 23) return 'peak_results';
+    return 'late_results';
 }
 
 export function getIntervalMs(): number {

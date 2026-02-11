@@ -11,7 +11,12 @@ export function NewsFeed() {
             setNews(data);
             setLoading(false);
         });
-        return unsub;
+        // Timeout fallback — don't stay in loading state forever
+        const timeout = setTimeout(() => setLoading(false), 5000);
+        return () => {
+            unsub();
+            clearTimeout(timeout);
+        };
     }, []);
 
     // Placeholder data if emptiness

@@ -1,10 +1,5 @@
 import type { ElectionSummary } from '../types/election';
 import { ELECTION } from '../data/constants';
-
-interface Props {
-    summary: ElectionSummary | null;
-}
-
 import { CountUp } from './CountUp';
 
 interface Props {
@@ -91,4 +86,3 @@ export function StatsGrid({ summary }: Props) {
         </div>
     );
 }
-

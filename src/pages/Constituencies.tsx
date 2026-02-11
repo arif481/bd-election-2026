@@ -3,15 +3,18 @@ import { onConstituenciesChange } from '../services/firestore';
 import type { Constituency } from '../types/election';
 import { DIVISIONS } from '../types/election';
 import { ConstituencyCard } from '../components/ConstituencyCard';
+import { CONSTITUENCIES } from '../data/constituencies';
 
 export function Constituencies() {
-    const [constituencies, setConstituencies] = useState<Constituency[]>([]);
+    const [constituencies, setConstituencies] = useState<Constituency[]>(CONSTITUENCIES);
     const [search, setSearch] = useState('');
     const [divisionFilter, setDivisionFilter] = useState('all');
     const [statusFilter, setStatusFilter] = useState('all');
 
     useEffect(() => {
-        return onConstituenciesChange(setConstituencies);
+        return onConstituenciesChange((data) => {
+            if (data.length > 0) setConstituencies(data);
+        });
     }, []);
 
     const filtered = useMemo(() => {
