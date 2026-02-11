@@ -19,8 +19,8 @@ const DISTRICT_SEATS: Record<string, Record<string, number>> = {
         Natore: 3, Chapainawabganj: 3, Joypurhat: 3,
     },
     Khulna: {
-        Kushtia: 6, Jashore: 6, Khulna: 6, Satkhira: 4, Jhenaidah: 4,
-        Chuadanga: 2, Magura: 2, Narail: 2, Meherpur: 2, Bagerhat: 2,
+        Kushtia: 4, Jashore: 6, Khulna: 6, Satkhira: 4, Jhenaidah: 4,
+        Chuadanga: 2, Magura: 2, Narail: 2, Meherpur: 2, Bagerhat: 3,
     },
     Rangpur: {
         Rangpur: 6, Dinajpur: 6, Gaibandha: 5, Kurigram: 4,
