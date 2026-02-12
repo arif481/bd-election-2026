@@ -1,8 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { addNewsItem } from './firestore';
 import type { NewsItem } from '../types/election';
+import { TavilyService } from './tavilyService';
 
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
+const USE_TAVILY_NEWS = true;
 
 // ─── News Collection Configuration ──────────────────────────────
 
@@ -108,6 +110,23 @@ export async function collectNews(): Promise<NewsCollectionResult> {
     lastNewsFetchTime = now;
 
     try {
+        if (USE_TAVILY_NEWS) {
+            const query = `${NEWS_PROMPT} Return valid JSON with "news" array.`;
+            const response = await TavilyService.search(query, {
+                includeAnswer: true,
+                topic: "news",
+                days: 1
+            });
+
+            if (response && response.answer) {
+                const parsed = parseNewsResponse(response.answer);
+                if (parsed && parsed.news.length) {
+                    return processParsedNews(parsed.news);
+                }
+            }
+        }
+
+        // Gemini Logic (Fallback or Manual)
         const model = genAI.getGenerativeModel({
             model: 'gemini-2.5-flash-lite',
             generationConfig: {
@@ -125,44 +144,7 @@ export async function collectNews(): Promise<NewsCollectionResult> {
             return { success: true, itemsAdded: 0, itemsSkipped: 0, message: 'No new news items found' };
         }
 
-        let added = 0;
-        let skipped = 0;
-
-        for (const item of parsed.news) {
-            if (!item.headline?.trim()) {
-                skipped++;
-                continue;
-            }
-
-            if (isDuplicate(item.headline)) {
-                skipped++;
-                continue;
-            }
-
-            markAsSeen(item.headline);
-
-            const newsItem: Omit<NewsItem, 'id'> = {
-                headline: item.headline,
-                summary: item.summary || '',
-                source: item.source || 'Auto-collected',
-                sourceUrl: item.sourceUrl || '',
-                timestamp: Date.now(),
-                category: validateCategory(item.category),
-                isVerified: item.importance === 'high', // Only high-importance auto-verified
-            };
-
-            await addNewsItem(newsItem);
-            added++;
-            totalAutoNewsFetched++;
-        }
-
-        console.log(`[NewsCollector] Added ${added} items, skipped ${skipped} duplicates`);
-        return {
-            success: true,
-            itemsAdded: added,
-            itemsSkipped: skipped,
-            message: `Collected ${added} news items`,
-        };
+        return processParsedNews(parsed.news);
 
     } catch (error) {
         console.error('[NewsCollector] Error:', error);
@@ -170,7 +152,48 @@ export async function collectNews(): Promise<NewsCollectionResult> {
     }
 }
 
-// ─── Parse Gemini News Response ──────────────────────────────────
+async function processParsedNews(items: ParsedNewsItem[]): Promise<NewsCollectionResult> {
+    let added = 0;
+    let skipped = 0;
+
+    for (const item of items) {
+        if (!item.headline?.trim()) {
+            skipped++;
+            continue;
+        }
+
+        if (isDuplicate(item.headline)) {
+            skipped++;
+            continue;
+        }
+
+        markAsSeen(item.headline);
+
+        const newsItem: Omit<NewsItem, 'id'> = {
+            headline: item.headline,
+            summary: item.summary || '',
+            source: item.source || 'Auto-collected',
+            sourceUrl: item.sourceUrl || '',
+            timestamp: Date.now(),
+            category: validateCategory(item.category),
+            isVerified: item.importance === 'high', // Only high-importance auto-verified
+        };
+
+        await addNewsItem(newsItem);
+        added++;
+        totalAutoNewsFetched++;
+    }
+
+    console.log(`[NewsCollector] Added ${added} items, skipped ${skipped} duplicates`);
+    return {
+        success: true,
+        itemsAdded: added,
+        itemsSkipped: skipped,
+        message: `Collected ${added} news items`,
+    };
+}
+
+// ─── Parse Response Helper ───────────────────────────────────────
 
 interface ParsedNewsItem {
     headline: string;

@@ -127,10 +127,13 @@ export function AdminDashboard() {
         setFetchMessage('Collection engine stopped');
     };
 
+    // Manual Fetch Options
+    const [useGeminiForManual, setUseGeminiForManual] = useState(false);
+
     const handleManualFetch = async () => {
         setLoading(true);
-        setFetchMessage('Fetching from multiple sources...');
-        const result = await manualFetch();
+        setFetchMessage(`Fetching from multiple sources (${useGeminiForManual ? 'Gemini' : 'Tavily'})...`);
+        const result = await manualFetch(useGeminiForManual);
         setFetchMessage(result.message);
         setLoading(false);
     };
@@ -453,6 +456,14 @@ export function AdminDashboard() {
                                 <button className="btn btn-warning btn-sm" onClick={handleManualFetch} disabled={loading}>
                                     🔄 Manual Fetch
                                 </button>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', cursor: 'pointer', userSelect: 'none' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={useGeminiForManual}
+                                        onChange={e => setUseGeminiForManual(e.target.checked)}
+                                    />
+                                    Force Gemini
+                                </label>
                             </div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                 Cycle #{collectorStats.cycleCount} • {collectorStats.sources?.totalSources || 0} total sources •

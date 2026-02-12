@@ -256,9 +256,9 @@ async function updateElectionSummary(): Promise<void> {
 
 // ─── Manual trigger for admin ────────────────────────────────────
 
-export async function manualFetch(): Promise<{ success: boolean; message: string }> {
+export async function manualFetch(useGemini: boolean = false): Promise<{ success: boolean; message: string }> {
     try {
-        const sourceResults = await fetchFromMultipleSources(3);
+        const sourceResults = await fetchFromMultipleSources(3, { forceGemini: useGemini });
         if (sourceResults.length === 0) {
             return { success: false, message: 'No sources returned data' };
         }

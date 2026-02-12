@@ -1,8 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { TavilyService } from './tavilyService';
 import type { SourceStatus } from '../types/election';
 import { logError } from './errorLogger';
 
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
+const USE_TAVILY_FOR_AUTO = true; // Feature flag for auto-collection
 
 // ─── Source Registry ─────────────────────────────────────────────
 
@@ -143,9 +145,14 @@ export interface SourceFetchResult {
     fetchTime: number;
 }
 
-export async function fetchFromSource(sourceId: string): Promise<SourceFetchResult | null> {
+export async function fetchFromSource(sourceId: string, options?: { forceGemini?: boolean }): Promise<SourceFetchResult | null> {
     const config = SOURCE_CONFIGS.find(s => s.id === sourceId);
     if (!config || !config.isActive) return null;
+
+    // Use Tavily if enabled AND not forced to use Gemini
+    if (USE_TAVILY_FOR_AUTO && !options?.forceGemini) {
+        return fetchFromSourceTavily(config);
+    }
 
     const state = sourceStates.get(sourceId)!;
     const startTime = Date.now();
@@ -220,6 +227,61 @@ export async function fetchFromSource(sourceId: string): Promise<SourceFetchResu
     }
 }
 
+async function fetchFromSourceTavily(config: typeof SOURCE_CONFIGS[0]): Promise<SourceFetchResult | null> {
+    const state = sourceStates.get(config.id)!;
+    const startTime = Date.now();
+    state.fetchCount++;
+    state.lastFetchTime = startTime;
+
+    try {
+        // Construct a query that asks for JSON specifically
+        const query = `${config.prompt} Output must be valid JSON matching the format: { "results": [], "sourcesUsed": [], "confidenceLevel": "high" }`;
+
+        const response = await TavilyService.search(query, {
+            includeAnswer: true,
+            topic: "general",
+            days: 1
+        });
+
+        if (!response || !response.answer) {
+            throw new Error('No answer received from Tavily');
+        }
+
+        const parsed = parseSourceResponse(response.answer);
+        if (!parsed) {
+            throw new Error('Failed to parse Tavily answer as JSON');
+        }
+
+        const elapsed = Date.now() - startTime;
+        state.successCount++;
+        state.lastSuccessTime = Date.now();
+        state.constituenciesReported = parsed.results.length || 0;
+        state.avgResponseTime = state.avgResponseTime > 0
+            ? (state.avgResponseTime * 0.7 + elapsed * 0.3)
+            : elapsed;
+        state.lastError = undefined;
+
+        console.log(`[SourceManager] (Tavily) ${config.name}: ${parsed.results.length} constituencies`);
+
+        return {
+            sourceId: config.id,
+            sourceName: config.name,
+            sourceTier: config.tier,
+            results: parsed.results as any[],
+            sourcesUsed: response.results?.map(r => r.url) || [],
+            confidenceLevel: (parsed.confidenceLevel as 'high' | 'medium' | 'low') || 'medium',
+            fetchTime: Date.now(),
+        };
+
+    } catch (error) {
+        state.errorCount++;
+        state.lastError = String(error);
+        console.error(`[SourceManager] (Tavily) ${config.name} error:`, error);
+        await logError('source_fetch', `Failed to fetch from ${config.name} (Tavily)`, String(error), config.id);
+        return null;
+    }
+}
+
 function parseSourceResponse(text: string): { results: unknown[]; sourcesUsed: string[]; confidenceLevel: string } | null {
     try {
         const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -240,7 +302,7 @@ function parseSourceResponse(text: string): { results: unknown[]; sourcesUsed: s
  */
 let sourceRotationIndex = 0;
 
-export async function fetchFromMultipleSources(maxSources: number = 2): Promise<SourceFetchResult[]> {
+export async function fetchFromMultipleSources(maxSources: number = 2, options?: { forceGemini?: boolean }): Promise<SourceFetchResult[]> {
     const activeSources = SOURCE_CONFIGS.filter(s => s.isActive);
     if (activeSources.length === 0) return [];
 
@@ -252,9 +314,9 @@ export async function fetchFromMultipleSources(maxSources: number = 2): Promise<
     }
     sourceRotationIndex = (sourceRotationIndex + maxSources) % activeSources.length;
 
-    console.log(`[SourceManager] Fetching from: ${selected.map(s => s.name).join(', ')}`);
+    console.log(`[SourceManager] Fetching from: ${selected.map(s => s.name).join(', ')}${options?.forceGemini ? ' (Force Gemini)' : ''}`);
 
-    const promises = selected.map(s => fetchFromSource(s.id));
+    const promises = selected.map(s => fetchFromSource(s.id, options));
     const results = await Promise.allSettled(promises);
 
     return results
