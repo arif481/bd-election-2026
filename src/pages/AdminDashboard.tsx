@@ -22,7 +22,8 @@ import {
 } from '../services/collector';
 import { collectNews, setAutoNewsEnabled, isAutoNewsEnabled } from '../services/newsCollector';
 import { toggleSource, getAllSourceStates } from '../services/sourceManager';
-import type { ElectionUpdate, SystemStatus, Candidate, DataConflict, AuditEntry, SourceStatus, ConstituencyStatus, NewsItem } from '../types/election';
+import { getActiveErrors, resolveError } from '../services/errorLogger';
+import type { ElectionUpdate, SystemStatus, Candidate, DataConflict, AuditEntry, SourceStatus, ConstituencyStatus, NewsItem, SystemError } from '../types/election';
 import { getTrustLabel } from '../services/verifier';
 import { CONSTITUENCIES } from '../data/constituencies';
 import { PARTIES } from '../data/parties';
@@ -67,6 +68,7 @@ export function AdminDashboard() {
     // Audit State
     const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
     const [auditFilter, setAuditFilter] = useState('');
+    const [systemErrors, setSystemErrors] = useState<SystemError[]>([]);
     const [now, setNow] = useState(Date.now());
 
     useEffect(() => {
@@ -90,6 +92,7 @@ export function AdminDashboard() {
         const timer = setInterval(() => {
             setCollectorStats(getCollectorStats());
             loadReviews();
+            getActiveErrors().then(setSystemErrors);
         }, 5000);
 
         return () => {
@@ -346,6 +349,7 @@ export function AdminDashboard() {
                         { id: 'news', label: '📰 News' },
                         { id: 'sources', label: '📡 Sources' },
                         { id: 'conflicts', label: `⚔️ Conflicts${pendingConflicts.length > 0 ? ` (${pendingConflicts.length})` : ''}` },
+                        { id: 'errors', label: `⚠️ Errors${systemErrors.length > 0 ? ` (${systemErrors.length})` : ''}` },
                         { id: 'audit', label: '📜 Audit' },
                     ] as const).map(tab => (
                         <button
@@ -742,7 +746,102 @@ export function AdminDashboard() {
                     </div>
                 )}
 
-                {/* ═══ SOURCES TAB ═══ */}
+                {/* ═══ ERRORS TAB ═══ */}
+                {activeTab === 'errors' && (
+                    <div className="card">
+                        <h3 className="section-title">⚠️ System Errors ({systemErrors.length})</h3>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '16px' }}>
+                            Active system errors requiring attention. Resolve them to clear the alert.
+                        </p>
+
+                        {systemErrors.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                                <div style={{ fontSize: '2rem', marginBottom: '10px' }}>✅</div>
+                                No active system errors
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                {systemErrors.map(err => (
+                                    <div key={err.id} style={{
+                                        padding: '16px', borderRadius: '8px',
+                                        background: 'var(--bg-elevated)', borderLeft: '4px solid #ef4444'
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                            <span style={{ fontWeight: 700, color: '#ef4444', fontSize: '0.9rem' }}>
+                                                {err.type.toUpperCase().replace('_', ' ')}
+                                            </span>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                                {new Date(err.timestamp).toLocaleTimeString()}
+                                            </span>
+                                        </div>
+
+                                        <div style={{ fontWeight: 600, marginBottom: '4px' }}>{err.message}</div>
+                                        {err.details && (
+                                            <div style={{
+                                                fontSize: '0.8rem', color: 'var(--text-secondary)',
+                                                background: 'rgba(0,0,0,0.1)', padding: '8px', borderRadius: '4px',
+                                                fontFamily: 'monospace', marginBottom: '12px', whiteSpace: 'pre-wrap'
+                                            }}>
+                                                {err.details}
+                                            </div>
+                                        )}
+
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                            <button
+                                                className="btn btn-sm btn-success"
+                                                onClick={async () => {
+                                                    await resolveError(err.id, 'resolved');
+                                                    setSystemErrors(prev => prev.filter(e => e.id !== err.id));
+                                                    setFetchMessage('✅ Error marked as resolved');
+                                                }}
+                                            >
+                                                ✅ Mark Resolved
+                                            </button>
+
+                                            {err.sourceId && (
+                                                <>
+                                                    <button
+                                                        className="btn btn-sm btn-warning"
+                                                        onClick={async () => {
+                                                            toggleSource(err.sourceId!, false);
+                                                            setFetchMessage(`⚠️ Disabled source: ${err.sourceId}`);
+                                                            setSourcesData(getAllSourceStates());
+                                                        }}
+                                                    >
+                                                        🚫 Disable Source
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-sm btn-primary"
+                                                        onClick={async () => {
+                                                            setLoading(true);
+                                                            setFetchMessage('Retrying fetch...');
+                                                            const result = await manualFetch(); // This retries all, but includes the failed source if active
+                                                            setFetchMessage(result.message);
+                                                            setLoading(false);
+                                                        }}
+                                                    >
+                                                        🔄 Retry Fetch
+                                                    </button>
+                                                </>
+                                            )}
+
+                                            <button
+                                                className="btn btn-sm btn-ghost"
+                                                onClick={async () => {
+                                                    await resolveError(err.id, 'ignored');
+                                                    setSystemErrors(prev => prev.filter(e => e.id !== err.id));
+                                                }}
+                                            >
+                                                🗑️ Ignore
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {activeTab === 'sources' && (
                     <div className="card">
                         <h3 className="section-title">📡 Data Sources</h3>

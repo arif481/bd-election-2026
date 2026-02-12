@@ -8,6 +8,7 @@ import {
     updateSourceStatuses,
 } from './firestore';
 import type { ElectionSummary, SystemStatus } from '../types/election';
+import { logError } from './errorLogger';
 import { PARTIES } from '../data/parties';
 
 // ─── Collection Timing ───────────────────────────────────────────
@@ -183,6 +184,7 @@ async function runCollectionCycle(): Promise<void> {
     } catch (error) {
         errorsToday++;
         console.error('[Collector] Cycle error:', error);
+        await logError('other', 'Collection cycle failed', String(error));
     }
 }
 

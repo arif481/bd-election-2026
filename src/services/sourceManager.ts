@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { SourceStatus } from '../types/election';
+import { logError } from './errorLogger';
 
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
 
@@ -171,6 +172,14 @@ export async function fetchFromSource(sourceId: string): Promise<SourceFetchResu
         if (!parsed) {
             state.errorCount++;
             state.lastError = 'Failed to parse response';
+
+            await logError(
+                'parsing',
+                `Failed to parse response from ${config.name}`,
+                text.substring(0, 200) + '...',
+                config.id
+            );
+
             return null;
         }
 
@@ -199,6 +208,14 @@ export async function fetchFromSource(sourceId: string): Promise<SourceFetchResu
         state.errorCount++;
         state.lastError = String(error);
         console.error(`[SourceManager] ${config.name} error:`, error);
+
+        await logError(
+            'source_fetch',
+            `Failed to fetch from ${config.name}`,
+            String(error),
+            config.id
+        );
+
         return null;
     }
 }

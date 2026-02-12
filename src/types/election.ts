@@ -191,3 +191,14 @@ export interface PendingUpdate {
     status: 'pending' | 'approved' | 'rejected' | 'merged';
     conflictId?: string;
 }
+
+export interface SystemError {
+    id: string;
+    timestamp: number;
+    type: 'source_fetch' | 'parsing' | 'rate_limit' | 'network' | 'validation' | 'other';
+    sourceId?: string;
+    message: string;
+    details?: string;
+    status: 'active' | 'resolved' | 'ignored';
+    resolvedAt?: number;
+}
