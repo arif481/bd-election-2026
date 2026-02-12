@@ -73,8 +73,8 @@ function App() {
             <Route path="/" element={<Home />} />
             <Route path="/constituencies" element={<Constituencies />} />
             <Route path="/parties" element={<PartyView />} />
-            {/* HIDDEN ADMIN ROUTE */}
-            <Route path="/admin-x7k9" element={<AdminRoute />} />
+            {/* ADMIN ROUTE */}
+            <Route path="/admin" element={<AdminRoute />} />
           </Routes>
         </main>
 
