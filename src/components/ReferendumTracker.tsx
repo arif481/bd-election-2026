@@ -36,7 +36,7 @@ export function ReferendumTracker({ result }: Props) {
                             gap: '4px'
                         }}
                     >
-                        {trust.emoji} Verified
+                        {trust.label} Verified
                     </span>
                 )}
             </div>

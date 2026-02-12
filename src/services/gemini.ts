@@ -81,127 +81,127 @@ Return results in this exact JSON format:
 Only return data you are confident about. Map party names correctly.`;
 
 export interface GeminiResult {
-    results: Array<{
-        constituencyNumber: number;
-        constituencyName: string;
-        division: string;
-        district: string;
-        status: string;
-        candidates: Array<{
-            name: string;
-            party: string;
-            partyId: string;
-            votes: number;
-            isWinner: boolean;
-            isLeading: boolean;
-        }>;
-        totalVotes: number;
-        winMargin: number;
+  results: Array<{
+    constituencyNumber: number;
+    constituencyName: string;
+    division: string;
+    district: string;
+    status: string;
+    candidates: Array<{
+      name: string;
+      party: string;
+      partyId: string;
+      votes: number;
+      isWinner: boolean;
+      isLeading: boolean;
     }>;
-    summary?: {
-        totalDeclared: number;
-        totalCounting: number;
-        partyStandings: Record<string, { won: number; leading: number }>;
-    } | null;
-    sourcesUsed: string[];
-    confidenceLevel: 'high' | 'medium' | 'low';
-    timestamp?: string;
+    totalVotes: number;
+    winMargin: number;
+  }>;
+  summary?: {
+    totalDeclared: number;
+    totalCounting: number;
+    partyStandings: Record<string, { won: number; leading: number }>;
+  } | null;
+  sourcesUsed: string[];
+  confidenceLevel: 'high' | 'medium' | 'low';
+  timestamp?: string;
 }
 
 // Track content hashes to avoid duplicate updates
 const contentHashes = new Map<string, string>();
 
 function hashContent(content: string): string {
-    let hash = 0;
-    for (let i = 0; i < content.length; i++) {
-        const char = content.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash;
-    }
-    return hash.toString(36);
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString(36);
 }
 
 export async function fetchElectionResults(): Promise<GeminiResult | null> {
-    try {
-        const model = genAI.getGenerativeModel({
-            model: 'gemini-2.5-flash-lite',
-            generationConfig: {
-                temperature: 0.1,
-                maxOutputTokens: 8192,
-            },
-            tools: [{ googleSearch: {} } as any],
-        });
+  try {
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash-lite',
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 8192,
+      },
+      tools: [{ googleSearch: {} } as any],
+    });
 
-        const result = await model.generateContent(ELECTION_PROMPT);
-        const text = result.response.text();
+    const result = await model.generateContent(ELECTION_PROMPT);
+    const text = result.response.text();
 
-        // Check if content changed
-        const hash = hashContent(text);
-        if (contentHashes.get('main') === hash) {
-            console.log('[Gemini] No new data (hash unchanged)');
-            return null;
-        }
-        contentHashes.set('main', hash);
-
-        return parseGeminiResponse(text);
-    } catch (error) {
-        console.error('[Gemini] Error fetching results:', error);
-        return null;
+    // Check if content changed
+    const hash = hashContent(text);
+    if (contentHashes.get('main') === hash) {
+      console.log('[Gemini] No new data (hash unchanged)');
+      return null;
     }
+    contentHashes.set('main', hash);
+
+    return parseGeminiResponse(text);
+  } catch (error) {
+    console.error('[Gemini] Error fetching results:', error);
+    return null;
+  }
 }
 
 export async function fetchDivisionResults(division: string): Promise<GeminiResult | null> {
-    try {
-        const model = genAI.getGenerativeModel({
-            model: 'gemini-2.5-flash-lite',
-            generationConfig: {
-                temperature: 0.1,
-                maxOutputTokens: 4096,
-            },
-            tools: [{ googleSearch: {} } as any],
-        });
+  try {
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash-lite',
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 4096,
+      },
+      tools: [{ googleSearch: {} } as any],
+    });
 
-        const result = await model.generateContent(DIVISION_PROMPT(division));
-        const text = result.response.text();
+    const result = await model.generateContent(DIVISION_PROMPT(division));
+    const text = result.response.text();
 
-        const hash = hashContent(text);
-        if (contentHashes.get(division) === hash) {
-            console.log(`[Gemini] No new data for ${division}`);
-            return null;
-        }
-        contentHashes.set(division, hash);
-
-        return parseGeminiResponse(text);
-    } catch (error) {
-        console.error(`[Gemini] Error fetching ${division}:`, error);
-        return null;
+    const hash = hashContent(text);
+    if (contentHashes.get(division) === hash) {
+      console.log(`[Gemini] No new data for ${division}`);
+      return null;
     }
+    contentHashes.set(division, hash);
+
+    return parseGeminiResponse(text);
+  } catch (error) {
+    console.error(`[Gemini] Error fetching ${division}:`, error);
+    return null;
+  }
 }
 
 function parseGeminiResponse(text: string): GeminiResult | null {
-    try {
-        // Try to extract JSON from the response
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            console.warn('[Gemini] No JSON found in response');
-            return null;
-        }
-
-        const parsed = JSON.parse(jsonMatch[0]) as GeminiResult;
-
-        // Validate structure
-        if (!parsed.results || !Array.isArray(parsed.results)) {
-            console.warn('[Gemini] Invalid response structure');
-            return null;
-        }
-
-        return parsed;
-    } catch (e) {
-        console.error('[Gemini] Parse error:', e);
-        return null;
+  try {
+    // Try to extract JSON from the response
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('[Gemini] No JSON found in response');
+      return null;
     }
+
+    const parsed = JSON.parse(jsonMatch[0]) as GeminiResult;
+
+    // Validate structure
+    if (!parsed.results || !Array.isArray(parsed.results)) {
+      console.warn('[Gemini] Invalid response structure');
+      return null;
+    }
+
+    return parsed;
+  } catch (e) {
+    console.error('[Gemini] Parse error:', e);
+    return null;
+  }
 }
 
 export function getApiCallCount(): number {
-    return contentHashes.size;
+  return contentHashes.size;
 }

@@ -56,7 +56,7 @@ export function LiveTicker({ updates }: Props) {
                                     border: `1px solid ${trust.color}40`,
                                 }}
                             >
-                                {trust.emoji}
+                                {trust.label}
                             </span>
                             <span className="ticker-message">
                                 {update.type === 'result_declared' && '🏆 '}

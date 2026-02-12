@@ -3,7 +3,8 @@ import { HashRouter, Routes, Route, NavLink, useLocation } from 'react-router-do
 import { Home } from './pages/Home';
 import { Constituencies } from './pages/Constituencies';
 import { PartyView } from './pages/PartyView';
-import { AdminLogin, isAdminAuthenticated } from './pages/AdminLogin';
+import { AdminLogin } from './pages/AdminLogin';
+import { isAdminAuthenticated } from './services/auth';
 import { DeveloperCredit } from './components/DeveloperCredit';
 import './index.css';
 

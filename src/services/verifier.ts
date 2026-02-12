@@ -1,145 +1,156 @@
 import type { Constituency } from '../types/election';
 
 interface TrustFactors {
-    sourceAgreement: number;    // 0-100: multiple sources agree
-    sourceReliability: number;  // 0-100: how reliable is the source
-    dataCompleteness: number;   // 0-100: all fields present
-    temporalConsistency: number;// 0-100: votes only increase
-    aiConfidence: number;       // 0-100: AI's own confidence
+    sourceAgreement: number;      // 0-100: multiple sources agree
+    crossSourceAgreement: number; // 0-100: cross-source verification
+    sourceReliability: number;    // 0-100: how reliable is the source
+    dataCompleteness: number;     // 0-100: all fields present
+    temporalConsistency: number;  // 0-100: votes only increase
+    aiConfidence: number;         // 0-100: AI's own confidence
 }
 
 const WEIGHTS = {
-    sourceAgreement: 0.40,
-    sourceReliability: 0.25,
+    sourceAgreement: 0.25,
+    crossSourceAgreement: 0.20,
+    sourceReliability: 0.20,
     dataCompleteness: 0.15,
     temporalConsistency: 0.10,
     aiConfidence: 0.10,
 };
 
 const RELIABLE_SOURCES = [
-    'bssnews.net',          // Bangladesh Sangbad Sangstha (official)
-    'ec.org.bd',            // Election Commission
-    'bdnews24.com',         //  Major news portal
-    'thedailystar.net',     // The Daily Star
-    'prothomalo.com',       // Prothom Alo
-    'dhakatribune.com',     // Dhaka Tribune
-    'newagebd.net',         // New Age
-    'risingbd.com',         // Rising BD
+    'ec.org.bd',
+    'bssnews.net',
+    'bdnews24.com',
+    'thedailystar.net',
+    'prothomalo.com',
+    'dhakatribune.com',
+    'bbc.com',
+    'aljazeera.com',
+    'reuters.com',
+    'ap.org',
+    'ndtv.com',
+    'indiatoday.in',
+    'newagebd.net',
+    'samakal.com',
+    'EC / BSS (Official)',
+    'The Daily Star',
+    'Prothom Alo',
+    'Dhaka Tribune',
+    'International Media',
+    'bdnews24.com',
 ];
 
+const TRUST_THRESHOLD = 55; // Minimum score for auto-publish
+
+// ─── Calculate Trust Score ───────────────────────────────────────
+
 export function calculateTrustScore(
-    result: any,
-    existingData: Constituency | null,
+    incoming: unknown,
+    existing: Constituency | null,
     sourcesUsed: string[],
-    aiConfidence: string,
+    confidence: string,
 ): { score: number; factors: TrustFactors } {
     const factors: TrustFactors = {
-        sourceAgreement: calculateSourceAgreement(sourcesUsed),
-        sourceReliability: calculateSourceReliability(sourcesUsed),
-        dataCompleteness: calculateDataCompleteness(result),
-        temporalConsistency: calculateTemporalConsistency(result, existingData),
-        aiConfidence: mapAiConfidence(aiConfidence),
+        sourceAgreement: 0,
+        crossSourceAgreement: 0,
+        sourceReliability: 0,
+        dataCompleteness: 0,
+        temporalConsistency: 0,
+        aiConfidence: 0,
     };
 
+    // 1. Source Agreement — how many sources provided this data
+    const uniqueSources = new Set(sourcesUsed);
+    if (uniqueSources.size >= 3) factors.sourceAgreement = 100;
+    else if (uniqueSources.size === 2) factors.sourceAgreement = 75;
+    else factors.sourceAgreement = 40;
+
+    // 2. Cross-Source Agreement — do multiple named sources agree
+    const reliableHits = sourcesUsed.filter(s =>
+        RELIABLE_SOURCES.some(rs =>
+            s.toLowerCase().includes(rs.toLowerCase()) ||
+            rs.toLowerCase().includes(s.toLowerCase())
+        )
+    );
+    if (reliableHits.length >= 3) factors.crossSourceAgreement = 100;
+    else if (reliableHits.length === 2) factors.crossSourceAgreement = 80;
+    else if (reliableHits.length === 1) factors.crossSourceAgreement = 50;
+    else factors.crossSourceAgreement = 20;
+
+    // 3. Source Reliability
+    const sourceLower = sourcesUsed.join(' ').toLowerCase();
+    if (sourceLower.includes('ec.org.bd') || sourceLower.includes('bssnews') || sourceLower.includes('official')) {
+        factors.sourceReliability = 100;
+    } else if (sourceLower.includes('bdnews24') || sourceLower.includes('dailystar') || sourceLower.includes('prothomalo')) {
+        factors.sourceReliability = 85;
+    } else if (sourceLower.includes('bbc') || sourceLower.includes('aljazeera') || sourceLower.includes('reuters')) {
+        factors.sourceReliability = 80;
+    } else if (sourceLower.includes('ndtv') || sourceLower.includes('indiatoday')) {
+        factors.sourceReliability = 70;
+    } else {
+        factors.sourceReliability = 40;
+    }
+
+    // 4. Data Completeness
+    const data = incoming as any;
+    let completeness = 0;
+    if (data.constituencyName) completeness += 20;
+    if (data.constituencyNumber) completeness += 20;
+    if (data.candidates && data.candidates.length > 0) completeness += 25;
+    if (data.totalVotes && data.totalVotes > 0) completeness += 20;
+    if (data.status) completeness += 15;
+    factors.dataCompleteness = completeness;
+
+    // 5. Temporal Consistency (votes should only increase)
+    if (existing && existing.totalVotes > 0) {
+        if (data.totalVotes && data.totalVotes >= existing.totalVotes) {
+            factors.temporalConsistency = 100;
+        } else if (data.totalVotes) {
+            const decrease = ((existing.totalVotes - data.totalVotes) / existing.totalVotes) * 100;
+            if (decrease < 5) factors.temporalConsistency = 70;
+            else if (decrease < 15) factors.temporalConsistency = 30;
+            else factors.temporalConsistency = 0;
+        } else {
+            factors.temporalConsistency = 0;
+        }
+    } else {
+        factors.temporalConsistency = 75; // neutral for first data point
+    }
+
+    // 6. AI Confidence
+    switch (confidence) {
+        case 'high': factors.aiConfidence = 90; break;
+        case 'medium': factors.aiConfidence = 60; break;
+        case 'low': factors.aiConfidence = 30; break;
+        default: factors.aiConfidence = 50;
+    }
+
+    // Calculate weighted score
     const score = Math.round(
         factors.sourceAgreement * WEIGHTS.sourceAgreement +
+        factors.crossSourceAgreement * WEIGHTS.crossSourceAgreement +
         factors.sourceReliability * WEIGHTS.sourceReliability +
         factors.dataCompleteness * WEIGHTS.dataCompleteness +
         factors.temporalConsistency * WEIGHTS.temporalConsistency +
         factors.aiConfidence * WEIGHTS.aiConfidence
     );
 
-    return { score: Math.min(100, Math.max(0, score)), factors };
+    return { score, factors };
 }
 
-function calculateSourceAgreement(sources: string[]): number {
-    if (sources.length >= 3) return 100;
-    if (sources.length === 2) return 70;
-    if (sources.length === 1) return 40;
-    return 10;
-}
-
-function calculateSourceReliability(sources: string[]): number {
-    if (!sources.length) return 10;
-
-    const reliableCount = sources.filter(s =>
-        RELIABLE_SOURCES.some(rs => s.includes(rs))
-    ).length;
-
-    if (reliableCount >= 2) return 100;
-    if (reliableCount === 1) return 70;
-    return 30;
-}
-
-function calculateDataCompleteness(result: any): number {
-    let score = 0;
-    const fields = ['constituencyNumber', 'constituencyName', 'candidates', 'totalVotes', 'status'];
-
-    fields.forEach(field => {
-        if (result[field] !== undefined && result[field] !== null) {
-            score += 20;
-        }
-    });
-
-    // Check candidate data quality
-    if (result.candidates && result.candidates.length > 0) {
-        const hasVotes = result.candidates.some((c: any) => c.votes > 0);
-        const hasParty = result.candidates.every((c: any) => c.party);
-        if (hasVotes) score = Math.min(100, score + 10);
-        if (hasParty) score = Math.min(100, score + 10);
-    }
-
-    return Math.min(100, score);
-}
-
-function calculateTemporalConsistency(result: any, existing: Constituency | null): number {
-    if (!existing || existing.status === 'not_started') return 80; // No previous data to conflict
-
-    // Votes should only increase
-    if (result.totalVotes && existing.totalVotes) {
-        if (result.totalVotes < existing.totalVotes * 0.9) {
-            return 20; // Suspicious decrease
-        }
-    }
-
-    // Status should progress forward
-    const statusOrder = ['not_started', 'counting', 'declared', 'result_confirmed'];
-    const existingIdx = statusOrder.indexOf(existing.status);
-    const newIdx = statusOrder.indexOf(result.status);
-
-    if (newIdx < existingIdx) return 30; // Status went backward
-
-    return 90;
-}
-
-function mapAiConfidence(confidence: string): number {
-    switch (confidence) {
-        case 'high': return 90;
-        case 'medium': return 60;
-        case 'low': return 30;
-        default: return 50;
-    }
-}
-
-// ─── Thresholds ──────────────────────────────────────────────────
-
-export const TRUST_THRESHOLDS = {
-    AUTO_PUBLISH: 70,
-    SHOW_WITH_WARNING: 50,
-    NEEDS_REVIEW: 50,
-};
+// ─── Auto-Publish Decision ───────────────────────────────────────
 
 export function shouldAutoPublish(score: number): boolean {
-    return score >= TRUST_THRESHOLDS.AUTO_PUBLISH;
+    return score >= TRUST_THRESHOLD;
 }
 
-export function needsReview(score: number): boolean {
-    return score < TRUST_THRESHOLDS.NEEDS_REVIEW;
-}
+// ─── Trust Label ─────────────────────────────────────────────────
 
-export function getTrustLabel(score: number): { label: string; color: string; emoji: string } {
-    if (score >= 80) return { label: 'Verified', color: '#4CAF50', emoji: '✅' };
-    if (score >= 70) return { label: 'Confident', color: '#8BC34A', emoji: '🟢' };
-    if (score >= 50) return { label: 'Unverified', color: '#FF9800', emoji: '⚠️' };
-    return { label: 'Low Trust', color: '#F44336', emoji: '🔴' };
+export function getTrustLabel(score: number): { label: string; color: string } {
+    if (score >= 90) return { label: 'Very High', color: '#22c55e' };
+    if (score >= 75) return { label: 'High', color: '#84cc16' };
+    if (score >= 55) return { label: 'Moderate', color: '#eab308' };
+    if (score >= 35) return { label: 'Low', color: '#f97316' };
+    return { label: 'Very Low', color: '#ef4444' };
 }

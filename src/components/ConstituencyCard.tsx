@@ -30,7 +30,7 @@ export function ConstituencyCard({ constituency: c }: Props) {
                             }}
                             title={`Trust: ${c.trustScore}%`}
                         >
-                            {trust.emoji}
+                            {trust.label}
                         </span>
                     )}
                     <span className={`status-badge status-${c.status}`}>

@@ -20,7 +20,11 @@ import type {
     SystemStatus,
     ElectionSummary,
     ReferendumResult,
-    NewsItem
+    NewsItem,
+    DataConflict,
+    PendingUpdate,
+    AuditEntry,
+    SourceStatus
 } from '../types/election';
 
 const db = getFirestore(app);
@@ -96,6 +100,10 @@ export function onSystemStatusChange(callback: (data: SystemStatus) => void) {
                 seatsDeclared: 0,
                 seatsTotal: 300,
                 collectionPhase: 'pre_voting',
+                activeSources: 0,
+                totalConflicts: 0,
+                resolvedConflicts: 0,
+                autoNewsCount: 0,
             });
         }
     });
@@ -195,4 +203,117 @@ export async function getPendingReviews() {
 export async function approveUpdate(updateId: string) {
     const ref = doc(db, 'updates', updateId);
     await updateDoc(ref, { isVerified: true });
+}
+
+// ─── Pending Updates (Staging Buffer) ───────────────────────────
+
+export async function addPendingUpdate(data: Omit<PendingUpdate, 'id'>) {
+    const ref = doc(collection(db, 'pending_updates'));
+    await setDoc(ref, data);
+}
+
+export async function getPendingUpdates(): Promise<PendingUpdate[]> {
+    const q = query(
+        collection(db, 'pending_updates'),
+        where('status', '==', 'pending'),
+        orderBy('timestamp', 'desc'),
+        limit(100)
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PendingUpdate));
+}
+
+export async function resolvePendingUpdate(id: string, status: 'approved' | 'rejected' | 'merged') {
+    const ref = doc(db, 'pending_updates', id);
+    await updateDoc(ref, { status, resolvedAt: Date.now() });
+}
+
+// ─── Conflicts ──────────────────────────────────────────────────
+
+export async function addConflict(data: Omit<DataConflict, 'id'>) {
+    const ref = doc(collection(db, 'conflicts'));
+    await setDoc(ref, data);
+}
+
+export function onConflictsChange(callback: (data: DataConflict[]) => void) {
+    const q = query(
+        collection(db, 'conflicts'),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+    );
+    return onSnapshot(q, (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DataConflict));
+        callback(data);
+    });
+}
+
+export async function getConflicts(onlyPending = false): Promise<DataConflict[]> {
+    let q;
+    if (onlyPending) {
+        q = query(
+            collection(db, 'conflicts'),
+            where('resolvedBy', '==', 'pending'),
+            orderBy('createdAt', 'desc'),
+            limit(50)
+        );
+    } else {
+        q = query(
+            collection(db, 'conflicts'),
+            orderBy('createdAt', 'desc'),
+            limit(100)
+        );
+    }
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DataConflict));
+}
+
+export async function resolveConflict(conflictId: string, resolvedBy: 'admin_override' | 'auto_consensus', resolution: string) {
+    const ref = doc(db, 'conflicts', conflictId);
+    await updateDoc(ref, { resolvedBy, resolvedAt: Date.now(), resolution });
+}
+
+// ─── Audit Log ──────────────────────────────────────────────────
+
+export async function addAuditEntry(data: Omit<AuditEntry, 'id'>) {
+    const ref = doc(collection(db, 'audit_log'));
+    await setDoc(ref, data);
+}
+
+export async function getAuditLog(constituencyId?: string): Promise<AuditEntry[]> {
+    let q;
+    if (constituencyId) {
+        q = query(
+            collection(db, 'audit_log'),
+            where('constituencyId', '==', constituencyId),
+            orderBy('timestamp', 'desc'),
+            limit(50)
+        );
+    } else {
+        q = query(
+            collection(db, 'audit_log'),
+            orderBy('timestamp', 'desc'),
+            limit(100)
+        );
+    }
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AuditEntry));
+}
+
+// ─── Source Status ──────────────────────────────────────────────
+
+export async function updateSourceStatuses(sources: SourceStatus[]) {
+    const ref = doc(db, 'system', 'sources');
+    await setDoc(ref, { sources, lastUpdated: Date.now() }, { merge: true });
+}
+
+export function onSourcesChange(callback: (data: SourceStatus[]) => void) {
+    const ref = doc(db, 'system', 'sources');
+    return onSnapshot(ref, (snapshot) => {
+        if (snapshot.exists()) {
+            const data = snapshot.data();
+            callback(data.sources || []);
+        } else {
+            callback([]);
+        }
+    });
 }

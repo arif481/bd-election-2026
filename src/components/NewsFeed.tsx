@@ -88,8 +88,23 @@ export function NewsFeed() {
                             {item.summary}
                         </p>
                         {item.source !== 'System' && (
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                Source: <span style={{ color: 'var(--text-primary)' }}>{item.source}</span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    {item.source === 'Admin' || item.source === 'manual_entry' ? (
+                                        <span style={{ padding: '1px 5px', borderRadius: '3px', fontSize: '0.6rem', background: '#3b82f620', color: '#60a5fa' }}>👤 Admin</span>
+                                    ) : item.isVerified ? (
+                                        <span style={{ padding: '1px 5px', borderRadius: '3px', fontSize: '0.6rem', background: '#22c55e20', color: '#22c55e' }}>✅ Verified</span>
+                                    ) : (
+                                        <span style={{ padding: '1px 5px', borderRadius: '3px', fontSize: '0.6rem', background: '#eab30820', color: '#eab308' }}>🤖 Auto</span>
+                                    )}
+                                    {item.sourceUrl ? (
+                                        <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text-primary)', textDecoration: 'underline' }}>
+                                            {item.source}
+                                        </a>
+                                    ) : (
+                                        <span style={{ color: 'var(--text-primary)' }}>{item.source}</span>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>

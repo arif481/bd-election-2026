@@ -8,6 +8,10 @@ import {
     updateConstituency,
     updateReferendum,
     addNewsItem,
+    onConflictsChange,
+    resolveConflict,
+    getAuditLog,
+    onSourcesChange,
 } from '../services/firestore';
 import {
     startCollection,
@@ -16,7 +20,9 @@ import {
     getCollectorStats,
     getCollectionPhase,
 } from '../services/collector';
-import type { ElectionUpdate, SystemStatus, Candidate } from '../types/election';
+import { collectNews, setAutoNewsEnabled, isAutoNewsEnabled } from '../services/newsCollector';
+import { toggleSource, getAllSourceStates } from '../services/sourceManager';
+import type { ElectionUpdate, SystemStatus, Candidate, DataConflict, AuditEntry, SourceStatus, ConstituencyStatus, NewsItem } from '../types/election';
 import { getTrustLabel } from '../services/verifier';
 import { CONSTITUENCIES } from '../data/constituencies';
 import { PARTIES } from '../data/parties';
@@ -50,10 +56,29 @@ export function AdminDashboard() {
     const [newsSource, setNewsSource] = useState('');
     const [newsSourceUrl, setNewsSourceUrl] = useState('');
     const [newsCategory, setNewsCategory] = useState<string>('general');
+    const [autoNewsToggle, setAutoNewsToggle] = useState(isAutoNewsEnabled());
+
+    // Sources State
+    const [sourcesData, setSourcesData] = useState<SourceStatus[]>([]);
+
+    // Conflicts State
+    const [conflicts, setConflicts] = useState<DataConflict[]>([]);
+
+    // Audit State
+    const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+    const [auditFilter, setAuditFilter] = useState('');
+    const [now, setNow] = useState(Date.now());
+
+    useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 60000); // Update "freshness" reference every minute
+        return () => clearInterval(timer);
+    }, []);
 
     useEffect(() => {
         const unsubs = [
             onSystemStatusChange(setStatus),
+            onConflictsChange(setConflicts),
+            onSourcesChange(setSourcesData),
         ];
 
         const loadReviews = async () => {
@@ -73,6 +98,20 @@ export function AdminDashboard() {
         };
     }, []);
 
+    // Load audit log when tab is opened
+    useEffect(() => {
+        if (activeTab === 'audit') {
+            getAuditLog().then(setAuditLog);
+        }
+    }, [activeTab]);
+
+    // Also sync local source states
+    useEffect(() => {
+        if (activeTab === 'sources') {
+            setSourcesData(getAllSourceStates());
+        }
+    }, [activeTab]);
+
     const handleStart = async () => {
         setLoading(true);
         await startCollection();
@@ -87,7 +126,7 @@ export function AdminDashboard() {
 
     const handleManualFetch = async () => {
         setLoading(true);
-        setFetchMessage('Fetching...');
+        setFetchMessage('Fetching from multiple sources...');
         const result = await manualFetch();
         setFetchMessage(result.message);
         setLoading(false);
@@ -103,13 +142,11 @@ export function AdminDashboard() {
         setLoading(true);
         setFetchMessage('Seeding constituencies...');
         try {
-            // Batch in chunks of 100 to stay well under Firestore's 500-doc limit
             for (let i = 0; i < CONSTITUENCIES.length; i += 100) {
                 const chunk = CONSTITUENCIES.slice(i, i + 100);
                 await batchSeedConstituencies(chunk);
             }
 
-            // Create a complete initial summary
             await updateSummary({
                 totalSeats: 300,
                 seatsDeclared: 0,
@@ -160,7 +197,7 @@ export function AdminDashboard() {
 
             await updateConstituency(selectedConstituency, {
                 candidates,
-                status: manualStatus as any,
+                status: manualStatus as ConstituencyStatus,
                 totalVotes,
                 winMargin,
                 trustScore: 100,
@@ -212,7 +249,7 @@ export function AdminDashboard() {
                 source: newsSource || 'Admin',
                 sourceUrl: newsSourceUrl,
                 timestamp: Date.now(),
-                category: newsCategory as any,
+                category: newsCategory as NewsItem['category'],
                 isVerified: true,
             });
             setFetchMessage('✅ News item published');
@@ -225,6 +262,39 @@ export function AdminDashboard() {
             setFetchMessage('❌ Error: ' + e);
         }
         setLoading(false);
+    };
+
+    const handleAutoNewsFetch = async () => {
+        setLoading(true);
+        setFetchMessage('Auto-collecting news...');
+        const result = await collectNews();
+        setFetchMessage(result.success
+            ? `✅ ${result.message}`
+            : `❌ ${result.message}`
+        );
+        setLoading(false);
+    };
+
+    const handleToggleAutoNews = () => {
+        const next = !autoNewsToggle;
+        setAutoNewsToggle(next);
+        setAutoNewsEnabled(next);
+        setFetchMessage(next ? '✅ Auto-news enabled' : '⚠️ Auto-news disabled');
+    };
+
+    const handleResolveConflict = async (conflictId: string, resolution: string) => {
+        try {
+            await resolveConflict(conflictId, 'admin_override', resolution);
+            setFetchMessage(`✅ Conflict resolved: ${resolution}`);
+        } catch (e) {
+            setFetchMessage(`❌ Error: ${e}`);
+        }
+    };
+
+    const handleToggleSource = (sourceId: string, active: boolean) => {
+        toggleSource(sourceId, active);
+        setSourcesData(getAllSourceStates());
+        setFetchMessage(`${active ? '✅ Enabled' : '⚠️ Disabled'} source: ${sourceId}`);
     };
 
     const addCandidate = () => {
@@ -244,6 +314,10 @@ export function AdminDashboard() {
         setManualCandidates(prev => prev.filter((_, i) => i !== index));
     };
 
+    const pendingConflicts = conflicts.filter(c => c.resolvedBy === 'pending');
+
+    const inputStyle = { padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'inherit' };
+
     return (
         <div className="page">
             <div className="app-container">
@@ -251,7 +325,8 @@ export function AdminDashboard() {
                     <div>
                         <h1 style={{ fontSize: '1.3rem', fontWeight: 800 }}>⚙️ Super Admin</h1>
                         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            Phase: {getCollectionPhase()} • Full Access Mode
+                            Phase: {getCollectionPhase()} • {collectorStats.sources?.activeSources || 0} sources active
+                            {pendingConflicts.length > 0 && <span style={{ color: '#f97316', marginLeft: '8px' }}>⚠️ {pendingConflicts.length} conflicts</span>}
                         </p>
                     </div>
                     <button className="btn btn-ghost btn-sm" onClick={() => {
@@ -263,17 +338,23 @@ export function AdminDashboard() {
                 </div>
 
                 {/* Tab Nav */}
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
-                    {(['monitor', 'manual', 'referendum', 'news'] as const).map(tab => (
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', flexWrap: 'wrap' }}>
+                    {([
+                        { id: 'monitor', label: '🖥️ Monitor' },
+                        { id: 'manual', label: '✍️ Manual' },
+                        { id: 'referendum', label: '🗳️ Referendum' },
+                        { id: 'news', label: '📰 News' },
+                        { id: 'sources', label: '📡 Sources' },
+                        { id: 'conflicts', label: `⚔️ Conflicts${pendingConflicts.length > 0 ? ` (${pendingConflicts.length})` : ''}` },
+                        { id: 'audit', label: '📜 Audit' },
+                    ] as const).map(tab => (
                         <button
-                            key={tab}
-                            className={`btn btn-sm ${activeTab === tab ? 'btn-primary' : 'btn-ghost'}`}
-                            onClick={() => setActiveTab(tab)}
+                            key={tab.id}
+                            className={`btn btn-sm ${activeTab === tab.id ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => setActiveTab(tab.id)}
+                            style={{ fontSize: '0.75rem', padding: '6px 10px' }}
                         >
-                            {tab === 'monitor' && '🖥️ Monitor'}
-                            {tab === 'manual' && '✍️ Manual Entry'}
-                            {tab === 'referendum' && '🗳️ Referendum'}
-                            {tab === 'news' && '📰 News'}
+                            {tab.label}
                         </button>
                     ))}
                 </div>
@@ -281,17 +362,13 @@ export function AdminDashboard() {
                 {/* Status Message */}
                 {fetchMessage && (
                     <div style={{
-                        fontSize: '0.85rem',
-                        padding: '10px 16px',
-                        marginBottom: '16px',
-                        borderRadius: '8px',
+                        fontSize: '0.85rem', padding: '10px 16px', marginBottom: '16px', borderRadius: '8px',
                         background: fetchMessage.startsWith('✅') ? 'rgba(34,197,94,0.1)' :
                             fetchMessage.startsWith('❌') ? 'rgba(239,68,68,0.1)' :
                                 'var(--bg-elevated)',
                         color: fetchMessage.startsWith('✅') ? '#22c55e' :
                             fetchMessage.startsWith('❌') ? '#ef4444' :
                                 'var(--text-secondary)',
-                        border: '1px solid transparent',
                     }}>
                         {fetchMessage}
                     </div>
@@ -311,11 +388,11 @@ export function AdminDashboard() {
                                 </div>
                             </div>
                             <div className="card">
-                                <div className="card-title">API Calls Today</div>
+                                <div className="card-title">API Calls</div>
                                 <div className="card-value">{collectorStats.apiCallsToday} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>/ 1000</span></div>
                             </div>
                             <div className="card">
-                                <div className="card-title">Errors Today</div>
+                                <div className="card-title">Errors</div>
                                 <div className="card-value" style={{ color: collectorStats.errorsToday > 0 ? 'var(--color-danger)' : 'var(--color-success)' }}>
                                     {collectorStats.errorsToday}
                                 </div>
@@ -326,6 +403,40 @@ export function AdminDashboard() {
                             </div>
                         </div>
 
+                        {/* Multi-Source Health Overview */}
+                        <div className="card" style={{ marginBottom: '20px' }}>
+                            <h3 className="section-title">📡 Source Health</h3>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px' }}>
+                                {sourcesData.length > 0 ? sourcesData.map(s => {
+                                    const health = s.errorCount === 0 ? '#22c55e' :
+                                        s.errorCount <= 2 ? '#eab308' : '#ef4444';
+                                    // Calculate freshness relative to current render time
+                                    const freshness = now - s.lastSuccessTime;
+                                    const isFresh = freshness < 120_000;
+                                    return (
+                                        <div key={s.id} style={{
+                                            padding: '10px', background: 'var(--bg-elevated)', borderRadius: '8px',
+                                            borderLeft: `3px solid ${s.isActive ? health : '#666'}`,
+                                        }}>
+                                            <div style={{ fontSize: '0.7rem', fontWeight: 700, marginBottom: '4px' }}>{s.name}</div>
+                                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                                                T{s.tier} • {s.successCount}/{s.fetchCount} OK
+                                                {isFresh && <span style={{ color: '#22c55e' }}> • Fresh</span>}
+                                            </div>
+                                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                                                {s.constituenciesReported} seats reported
+                                            </div>
+                                        </div>
+                                    );
+                                }) : (
+                                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', gridColumn: '1 / -1' }}>
+                                        Sources will appear after first collection cycle
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Collection Controls */}
                         <div className="card" style={{ marginBottom: '20px' }}>
                             <h3 className="section-title">🎮 Collection Controls</h3>
                             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
@@ -339,8 +450,13 @@ export function AdminDashboard() {
                                     🔄 Manual Fetch
                                 </button>
                             </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                Cycle #{collectorStats.cycleCount} • {collectorStats.sources?.totalSources || 0} total sources •
+                                Interval: {(collectorStats.interval / 1000).toFixed(0)}s
+                            </div>
                         </div>
 
+                        {/* Review Queue */}
                         <div className="card">
                             <h3 className="section-title">📋 Review Queue ({pendingReviews.length})</h3>
                             <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
@@ -363,7 +479,7 @@ export function AdminDashboard() {
                                                 <div style={{ fontSize: '0.85rem' }}>{review.message}</div>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                     <span style={{ fontSize: '0.75rem', padding: '2px 6px', borderRadius: '4px', background: `${trust.color}15`, color: trust.color }}>
-                                                        {trust.emoji} Trust: {review.trustScore}
+                                                        Trust: {review.trustScore}
                                                     </span>
                                                     <button className="btn btn-success btn-sm" onClick={() => handleApprove(review.id)}>
                                                         Approve
@@ -392,11 +508,7 @@ export function AdminDashboard() {
                             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
                                 Populates 300 constituencies and initial election summary. Safe to re-run.
                             </p>
-                            <button
-                                className="btn btn-primary btn-sm"
-                                onClick={handleSeedDatabase}
-                                disabled={loading}
-                            >
+                            <button className="btn btn-primary btn-sm" onClick={handleSeedDatabase} disabled={loading}>
                                 {loading ? 'Seeding...' : '⚡ Seed Database'}
                             </button>
                         </div>
@@ -441,12 +553,12 @@ export function AdminDashboard() {
                                                 placeholder="Candidate name"
                                                 value={c.name}
                                                 onChange={e => updateCandidate(i, 'name', e.target.value)}
-                                                style={{ padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'inherit' }}
+                                                style={inputStyle}
                                             />
                                             <select
                                                 value={c.party}
                                                 onChange={e => updateCandidate(i, 'party', e.target.value)}
-                                                style={{ padding: '8px', background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.8rem', fontFamily: 'inherit' }}
+                                                style={{ ...inputStyle, fontSize: '0.8rem' }}
                                             >
                                                 {PARTIES.map(p => (
                                                     <option key={p.id} value={p.id}>{p.shortName}</option>
@@ -458,13 +570,14 @@ export function AdminDashboard() {
                                                 placeholder="Votes"
                                                 value={c.votes || ''}
                                                 onChange={e => updateCandidate(i, 'votes', parseInt(e.target.value) || 0)}
-                                                style={{ padding: '8px', background: 'var(--bg-elevated)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.85rem', fontFamily: 'inherit' }}
+                                                style={inputStyle}
                                             />
                                             <button
                                                 onClick={() => removeCandidate(i)}
                                                 disabled={manualCandidates.length <= 2}
                                                 style={{
-                                                    background: 'transparent', border: 'none', color: manualCandidates.length <= 2 ? 'var(--text-muted)' : 'var(--color-danger)',
+                                                    background: 'transparent', border: 'none',
+                                                    color: manualCandidates.length <= 2 ? 'var(--text-muted)' : 'var(--color-danger)',
                                                     cursor: manualCandidates.length <= 2 ? 'not-allowed' : 'pointer', fontSize: '1rem',
                                                 }}
                                                 title="Remove candidate"
@@ -499,42 +612,22 @@ export function AdminDashboard() {
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                             <div className="admin-form-group" style={{ margin: 0 }}>
                                 <label>✅ YES Votes</label>
-                                <input
-                                    type="number"
-                                    value={refYes || ''}
-                                    onChange={e => setRefYes(parseInt(e.target.value) || 0)}
-                                    placeholder="0"
-                                />
+                                <input type="number" value={refYes || ''} onChange={e => setRefYes(parseInt(e.target.value) || 0)} placeholder="0" />
                             </div>
                             <div className="admin-form-group" style={{ margin: 0 }}>
                                 <label>❌ NO Votes</label>
-                                <input
-                                    type="number"
-                                    value={refNo || ''}
-                                    onChange={e => setRefNo(parseInt(e.target.value) || 0)}
-                                    placeholder="0"
-                                />
+                                <input type="number" value={refNo || ''} onChange={e => setRefNo(parseInt(e.target.value) || 0)} placeholder="0" />
                             </div>
                         </div>
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                             <div className="admin-form-group" style={{ margin: 0 }}>
                                 <label>Centers Reported</label>
-                                <input
-                                    type="number"
-                                    value={refCentersReported || ''}
-                                    onChange={e => setRefCentersReported(parseInt(e.target.value) || 0)}
-                                    placeholder="0"
-                                />
+                                <input type="number" value={refCentersReported || ''} onChange={e => setRefCentersReported(parseInt(e.target.value) || 0)} placeholder="0" />
                             </div>
                             <div className="admin-form-group" style={{ margin: 0 }}>
                                 <label>Total Centers</label>
-                                <input
-                                    type="number"
-                                    value={refTotalCenters || ''}
-                                    onChange={e => setRefTotalCenters(parseInt(e.target.value) || 0)}
-                                    placeholder="40000"
-                                />
+                                <input type="number" value={refTotalCenters || ''} onChange={e => setRefTotalCenters(parseInt(e.target.value) || 0)} placeholder="40000" />
                             </div>
                         </div>
 
@@ -547,32 +640,18 @@ export function AdminDashboard() {
                             </select>
                         </div>
 
-                        {/* Live Preview */}
                         {(refYes > 0 || refNo > 0) && (
                             <div style={{ padding: '16px', background: 'var(--bg-elevated)', borderRadius: '8px', marginBottom: '16px' }}>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>Preview</div>
                                 <div style={{ display: 'flex', gap: '20px' }}>
-                                    <div>
-                                        <span style={{ color: '#22c55e', fontWeight: 700 }}>YES: </span>
-                                        {refYes + refNo > 0 ? ((refYes / (refYes + refNo)) * 100).toFixed(1) : 0}%
-                                    </div>
-                                    <div>
-                                        <span style={{ color: '#ef4444', fontWeight: 700 }}>NO: </span>
-                                        {refYes + refNo > 0 ? ((refNo / (refYes + refNo)) * 100).toFixed(1) : 0}%
-                                    </div>
-                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                                        Total: {(refYes + refNo).toLocaleString()}
-                                    </div>
+                                    <div><span style={{ color: '#22c55e', fontWeight: 700 }}>YES: </span>{refYes + refNo > 0 ? ((refYes / (refYes + refNo)) * 100).toFixed(1) : 0}%</div>
+                                    <div><span style={{ color: '#ef4444', fontWeight: 700 }}>NO: </span>{refYes + refNo > 0 ? ((refNo / (refYes + refNo)) * 100).toFixed(1) : 0}%</div>
+                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Total: {(refYes + refNo).toLocaleString()}</div>
                                 </div>
                             </div>
                         )}
 
-                        <button
-                            className="btn btn-success"
-                            onClick={handleReferendumUpdate}
-                            disabled={loading}
-                            style={{ width: '100%' }}
-                        >
+                        <button className="btn btn-success" onClick={handleReferendumUpdate} disabled={loading} style={{ width: '100%' }}>
                             {loading ? 'Updating...' : '📊 Update Referendum Data'}
                         </button>
                     </div>
@@ -581,48 +660,56 @@ export function AdminDashboard() {
                 {/* ═══ NEWS TAB ═══ */}
                 {activeTab === 'news' && (
                     <div className="card">
-                        <h3 className="section-title">📰 News Ticker Control</h3>
-                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '20px' }}>
-                            Post breaking news or updates to the live feed
-                        </p>
+                        <h3 className="section-title">📰 News Control</h3>
+
+                        {/* Auto-News Controls */}
+                        <div style={{ padding: '16px', background: 'var(--bg-elevated)', borderRadius: '8px', marginBottom: '20px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <div>
+                                    <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>🤖 Auto-Collect News</span>
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                        Gemini fetches and categorizes election news automatically
+                                    </div>
+                                </div>
+                                <button
+                                    className={`btn btn-sm ${autoNewsToggle ? 'btn-success' : 'btn-ghost'}`}
+                                    onClick={handleToggleAutoNews}
+                                >
+                                    {autoNewsToggle ? '🟢 ON' : '⚪ OFF'}
+                                </button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <button className="btn btn-primary btn-sm" onClick={handleAutoNewsFetch} disabled={loading}>
+                                    🔄 Fetch News Now
+                                </button>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                    {collectorStats.news?.totalAutoFetched || 0} auto-collected •
+                                    {collectorStats.news?.seenHeadlines || 0} seen • 2min cooldown
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Manual News Entry */}
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '12px' }}>✍️ Manual News Entry</h4>
 
                         <div className="admin-form-group">
                             <label>Headline *</label>
-                            <input
-                                type="text"
-                                value={newsHeadline}
-                                onChange={e => setNewsHeadline(e.target.value)}
-                                placeholder="e.g. BNP takes early lead in Dhaka-5"
-                            />
+                            <input type="text" value={newsHeadline} onChange={e => setNewsHeadline(e.target.value)} placeholder="e.g. BNP takes early lead in Dhaka-5" />
                         </div>
 
                         <div className="admin-form-group">
                             <label>Summary</label>
-                            <textarea
-                                value={newsSummary}
-                                onChange={e => setNewsSummary(e.target.value)}
-                                placeholder="Optional detailed summary..."
-                            />
+                            <textarea value={newsSummary} onChange={e => setNewsSummary(e.target.value)} placeholder="Optional detailed summary..." />
                         </div>
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                             <div className="admin-form-group">
                                 <label>Source</label>
-                                <input
-                                    type="text"
-                                    value={newsSource}
-                                    onChange={e => setNewsSource(e.target.value)}
-                                    placeholder="e.g. BDNews24"
-                                />
+                                <input type="text" value={newsSource} onChange={e => setNewsSource(e.target.value)} placeholder="e.g. BDNews24" />
                             </div>
                             <div className="admin-form-group">
                                 <label>Source URL</label>
-                                <input
-                                    type="url"
-                                    value={newsSourceUrl}
-                                    onChange={e => setNewsSourceUrl(e.target.value)}
-                                    placeholder="https://..."
-                                />
+                                <input type="url" value={newsSourceUrl} onChange={e => setNewsSourceUrl(e.target.value)} placeholder="https://..." />
                             </div>
                         </div>
 
@@ -637,7 +724,6 @@ export function AdminDashboard() {
                             </select>
                         </div>
 
-                        {/* Preview */}
                         {newsHeadline && (
                             <div style={{ padding: '12px', background: 'var(--bg-elevated)', borderRadius: '8px', marginBottom: '16px' }}>
                                 <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Preview</div>
@@ -650,13 +736,267 @@ export function AdminDashboard() {
                             </div>
                         )}
 
-                        <button
-                            className="btn btn-success"
-                            onClick={handleNewsSubmit}
-                            disabled={loading || !newsHeadline.trim()}
-                            style={{ width: '100%' }}
-                        >
+                        <button className="btn btn-success" onClick={handleNewsSubmit} disabled={loading || !newsHeadline.trim()} style={{ width: '100%' }}>
                             {loading ? 'Publishing...' : '📨 Publish News Update'}
+                        </button>
+                    </div>
+                )}
+
+                {/* ═══ SOURCES TAB ═══ */}
+                {activeTab === 'sources' && (
+                    <div className="card">
+                        <h3 className="section-title">📡 Data Sources</h3>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '16px' }}>
+                            Live status of all data collection sources. Toggle sources on/off.
+                        </p>
+
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                                <thead>
+                                    <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left' }}>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Source</th>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Tier</th>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Status</th>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Fetches</th>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Errors</th>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Seats</th>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Avg Time</th>
+                                        <th style={{ padding: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Toggle</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {sourcesData.map(s => {
+                                        const errRate = s.fetchCount > 0 ? ((s.errorCount / s.fetchCount) * 100).toFixed(0) : '0';
+                                        const statusColor = !s.isActive ? '#666' :
+                                            s.errorCount === 0 ? '#22c55e' :
+                                                parseInt(errRate) > 50 ? '#ef4444' : '#eab308';
+                                        return (
+                                            <tr key={s.id} style={{ borderBottom: '1px solid var(--border-color)', opacity: s.isActive ? 1 : 0.5 }}>
+                                                <td style={{ padding: '10px 8px', fontWeight: 600 }}>{s.name}</td>
+                                                <td style={{ padding: '10px 8px' }}>
+                                                    <span style={{
+                                                        padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 700,
+                                                        background: s.tier === 1 ? '#22c55e20' : s.tier === 2 ? '#3b82f620' : '#eab30820',
+                                                        color: s.tier === 1 ? '#22c55e' : s.tier === 2 ? '#3b82f6' : '#eab308',
+                                                    }}>T{s.tier}</span>
+                                                </td>
+                                                <td style={{ padding: '10px 8px' }}>
+                                                    <span style={{ color: statusColor }}>●</span> {s.isActive ? 'Active' : 'Disabled'}
+                                                </td>
+                                                <td style={{ padding: '10px 8px' }}>{s.successCount}/{s.fetchCount}</td>
+                                                <td style={{ padding: '10px 8px', color: s.errorCount > 0 ? '#ef4444' : 'inherit' }}>
+                                                    {s.errorCount} ({errRate}%)
+                                                </td>
+                                                <td style={{ padding: '10px 8px' }}>{s.constituenciesReported}</td>
+                                                <td style={{ padding: '10px 8px' }}>
+                                                    {s.avgResponseTime > 0 ? `${(s.avgResponseTime / 1000).toFixed(1)}s` : '—'}
+                                                </td>
+                                                <td style={{ padding: '10px 8px' }}>
+                                                    <button
+                                                        className={`btn btn-sm ${s.isActive ? 'btn-danger' : 'btn-success'}`}
+                                                        onClick={() => handleToggleSource(s.id, !s.isActive)}
+                                                        style={{ fontSize: '0.65rem', padding: '2px 8px' }}
+                                                    >
+                                                        {s.isActive ? 'Disable' : 'Enable'}
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {sourcesData.length === 0 && (
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', padding: '20px' }}>
+                                No source data yet. Start the collection engine to see source health.
+                            </p>
+                        )}
+
+                        {/* Source Summary */}
+                        <div style={{ display: 'flex', gap: '16px', marginTop: '16px', padding: '12px', background: 'var(--bg-elevated)', borderRadius: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            <span>Total: {sourcesData.length}</span>
+                            <span>Active: {sourcesData.filter(s => s.isActive).length}</span>
+                            <span>Total Fetches: {sourcesData.reduce((s, st) => s + st.fetchCount, 0)}</span>
+                            <span>Total Errors: {sourcesData.reduce((s, st) => s + st.errorCount, 0)}</span>
+                        </div>
+                    </div>
+                )}
+
+                {/* ═══ CONFLICTS TAB ═══ */}
+                {activeTab === 'conflicts' && (
+                    <div className="card">
+                        <h3 className="section-title">⚔️ Data Conflicts ({conflicts.length})</h3>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '16px' }}>
+                            When multiple sources disagree, conflicts appear here for admin resolution.
+                        </p>
+
+                        {conflicts.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                                <div style={{ fontSize: '2rem', marginBottom: '8px' }}>✅</div>
+                                <div style={{ fontSize: '0.9rem' }}>No data conflicts</div>
+                                <div style={{ fontSize: '0.75rem', marginTop: '4px' }}>
+                                    Conflicts will appear when multiple sources report different data for the same constituency
+                                </div>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                {conflicts.map(conflict => {
+                                    const isPending = conflict.resolvedBy === 'pending';
+                                    const severityColor = conflict.severity === 'critical' ? '#ef4444' :
+                                        conflict.severity === 'high' ? '#f97316' :
+                                            conflict.severity === 'medium' ? '#eab308' : '#22c55e';
+                                    return (
+                                        <div key={conflict.id} style={{
+                                            padding: '16px', background: 'var(--bg-elevated)', borderRadius: '8px',
+                                            borderLeft: `3px solid ${severityColor}`, opacity: isPending ? 1 : 0.7,
+                                        }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                                                <div>
+                                                    <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{conflict.constituencyName}</span>
+                                                    <span style={{
+                                                        marginLeft: '8px', padding: '2px 6px', borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700,
+                                                        background: `${severityColor}20`, color: severityColor,
+                                                    }}>
+                                                        {conflict.severity.toUpperCase()} • {conflict.type.replace('_', ' ')}
+                                                    </span>
+                                                </div>
+                                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                    {new Date(conflict.createdAt).toLocaleTimeString()}
+                                                </span>
+                                            </div>
+
+                                            {/* Side-by-side comparison */}
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                                                <div style={{ padding: '8px', background: 'var(--bg-surface)', borderRadius: '6px' }}>
+                                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                                                        📰 {conflict.sourceA.name} (T{conflict.sourceA.tier})
+                                                    </div>
+                                                    <div style={{ fontSize: '0.8rem' }}>
+                                                        {Object.entries(conflict.sourceA.data).map(([k, v]) => (
+                                                            <div key={k}>{k}: <strong>{String(v)}</strong></div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <div style={{ padding: '8px', background: 'var(--bg-surface)', borderRadius: '6px' }}>
+                                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                                                        📰 {conflict.sourceB.name} (T{conflict.sourceB.tier})
+                                                    </div>
+                                                    <div style={{ fontSize: '0.8rem' }}>
+                                                        {Object.entries(conflict.sourceB.data).map(([k, v]) => (
+                                                            <div key={k}>{k}: <strong>{String(v)}</strong></div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {isPending ? (
+                                                <div style={{ display: 'flex', gap: '8px' }}>
+                                                    <button
+                                                        className="btn btn-success btn-sm"
+                                                        onClick={() => handleResolveConflict(conflict.id, `Accept Source A: ${conflict.sourceA.name}`)}
+                                                        style={{ fontSize: '0.7rem' }}
+                                                    >
+                                                        Accept {conflict.sourceA.name}
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-primary btn-sm"
+                                                        onClick={() => handleResolveConflict(conflict.id, `Accept Source B: ${conflict.sourceB.name}`)}
+                                                        style={{ fontSize: '0.7rem' }}
+                                                    >
+                                                        Accept {conflict.sourceB.name}
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-warning btn-sm"
+                                                        onClick={() => handleResolveConflict(conflict.id, 'Dismissed by admin')}
+                                                        style={{ fontSize: '0.7rem' }}
+                                                    >
+                                                        Dismiss
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div style={{ fontSize: '0.75rem', color: '#22c55e' }}>
+                                                    ✅ Resolved: {conflict.resolution || conflict.resolvedBy}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* ═══ AUDIT LOG TAB ═══ */}
+                {activeTab === 'audit' && (
+                    <div className="card">
+                        <h3 className="section-title">📜 Audit Log</h3>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '16px' }}>
+                            Full change history — every update, conflict resolution, and manual override.
+                        </p>
+
+                        <div className="admin-form-group" style={{ marginBottom: '16px' }}>
+                            <input
+                                type="text"
+                                placeholder="Filter by constituency name..."
+                                value={auditFilter}
+                                onChange={e => setAuditFilter(e.target.value)}
+                                style={inputStyle}
+                            />
+                        </div>
+
+                        <div style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                            {auditLog.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                                    <div style={{ fontSize: '2rem', marginBottom: '8px' }}>📭</div>
+                                    <div>No audit entries yet</div>
+                                </div>
+                            ) : (
+                                auditLog
+                                    .filter(a => !auditFilter || a.constituencyName.toLowerCase().includes(auditFilter.toLowerCase()))
+                                    .map(entry => {
+                                        const actionColor = entry.action === 'manual_override' ? '#f97316' :
+                                            entry.action === 'conflict_resolve' ? '#eab308' :
+                                                entry.action === 'auto_publish' ? '#22c55e' : '#3b82f6';
+                                        const trust = getTrustLabel(entry.trustScore);
+                                        return (
+                                            <div key={entry.id} style={{
+                                                padding: '12px', borderBottom: '1px solid var(--border-color)',
+                                                display: 'flex', flexDirection: 'column', gap: '4px',
+                                            }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                        <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{entry.constituencyName}</span>
+                                                        <span style={{
+                                                            padding: '1px 6px', borderRadius: '4px', fontSize: '0.6rem', fontWeight: 700,
+                                                            background: `${actionColor}20`, color: actionColor,
+                                                        }}>
+                                                            {entry.action.replace('_', ' ')}
+                                                        </span>
+                                                    </div>
+                                                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                        {new Date(entry.timestamp).toLocaleTimeString()}
+                                                    </span>
+                                                </div>
+                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                                    Source: {entry.source} • Trust: <span style={{ color: trust.color }}>{entry.trustScore}</span>
+                                                </div>
+                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                                    {JSON.stringify(entry.newData).slice(0, 100)}
+                                                    {JSON.stringify(entry.newData).length > 100 && '...'}
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                            )}
+                        </div>
+
+                        <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => getAuditLog().then(setAuditLog)}
+                            style={{ marginTop: '12px', width: '100%' }}
+                        >
+                            🔄 Refresh Audit Log
                         </button>
                     </div>
                 )}

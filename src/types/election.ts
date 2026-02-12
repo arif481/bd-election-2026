@@ -64,6 +64,10 @@ export interface SystemStatus {
     seatsDeclared: number;
     seatsTotal: number;
     collectionPhase: CollectionPhase;
+    activeSources: number;
+    totalConflicts: number;
+    resolvedConflicts: number;
+    autoNewsCount: number;
 }
 
 export type CollectionPhase = 'pre_voting' | 'voting' | 'early_results' | 'peak_results' | 'late_results' | 'cleanup' | 'completed';
@@ -128,3 +132,62 @@ export const DIVISION_SEATS: Record<Division, number> = {
     Barishal: 21,
     Sylhet: 19,
 };
+
+// ─── Multi-Source & Conflict Resolution ─────────────────────────
+
+export type ConflictType = 'vote_mismatch' | 'winner_disagreement' | 'status_regression' | 'candidate_name_mismatch';
+export type ConflictResolution = 'auto_consensus' | 'admin_override' | 'pending';
+
+export interface DataConflict {
+    id: string;
+    constituencyId: string;
+    constituencyName: string;
+    type: ConflictType;
+    sourceA: { name: string; tier: number; data: Record<string, unknown>; timestamp: number };
+    sourceB: { name: string; tier: number; data: Record<string, unknown>; timestamp: number };
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    resolvedBy: ConflictResolution;
+    resolvedAt: number;
+    resolution?: string;
+    createdAt: number;
+}
+
+export interface SourceStatus {
+    id: string;
+    name: string;
+    tier: 1 | 2 | 3 | 4;
+    lastFetchTime: number;
+    lastSuccessTime: number;
+    fetchCount: number;
+    errorCount: number;
+    successCount: number;
+    constituenciesReported: number;
+    isActive: boolean;
+    lastError?: string;
+    avgResponseTime: number;
+}
+
+export interface AuditEntry {
+    id: string;
+    constituencyId: string;
+    constituencyName: string;
+    action: 'create' | 'update' | 'conflict_resolve' | 'manual_override' | 'auto_publish';
+    source: string;
+    previousData?: Record<string, unknown>;
+    newData: Record<string, unknown>;
+    timestamp: number;
+    trustScore: number;
+}
+
+export interface PendingUpdate {
+    id: string;
+    constituencyId: string;
+    constituencyName: string;
+    source: string;
+    sourceTier: number;
+    data: Record<string, unknown>;
+    timestamp: number;
+    trustScore: number;
+    status: 'pending' | 'approved' | 'rejected' | 'merged';
+    conflictId?: string;
+}

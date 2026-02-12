@@ -1,14 +1,13 @@
-import { fetchElectionResults, fetchDivisionResults, type GeminiResult } from './gemini';
-import { calculateTrustScore, shouldAutoPublish } from './verifier';
+import { fetchFromMultipleSources, getAllSourceStates, getActiveSourceCount, getSourceSummary } from './sourceManager';
+import { processMultiSourceResults } from './conflictResolver';
+import { collectNews, getNewsCollectorStats } from './newsCollector';
 import {
-    updateConstituency,
-    addUpdate,
-    updateSummary,
     updateSystemStatus,
     getConstituencies,
+    updateSummary,
+    updateSourceStatuses,
 } from './firestore';
-import type { Candidate, ConstituencyStatus, SystemStatus, ElectionSummary } from '../types/election';
-import { DIVISIONS } from '../types/election';
+import type { ElectionSummary, SystemStatus } from '../types/election';
 import { PARTIES } from '../data/parties';
 
 // ─── Collection Timing ───────────────────────────────────────────
@@ -55,6 +54,7 @@ export function isCollectionActive(): boolean {
 let collectionTimer: ReturnType<typeof setInterval> | null = null;
 let apiCallsToday = 0;
 let errorsToday = 0;
+let cycleCount = 0;
 const declaredSeats = new Set<string>();
 
 export async function startCollection(): Promise<void> {
@@ -63,7 +63,7 @@ export async function startCollection(): Promise<void> {
         return;
     }
 
-    console.log('[Collector] Starting collection engine...');
+    console.log('[Collector] Starting multi-source collection engine...');
 
     // Initialize declaredSeats from existing data
     const existing = await getConstituencies();
@@ -78,7 +78,8 @@ export async function startCollection(): Promise<void> {
         isCollecting: true,
         collectionPhase: getCollectionPhase(),
         lastFetchTime: Date.now(),
-        seatsDeclared: declaredSeats.size, // Sync immediately
+        seatsDeclared: declaredSeats.size,
+        activeSources: getActiveSourceCount(),
     });
 
     // Initial fetch
@@ -123,21 +124,48 @@ function scheduleNextFetch(): void {
 
 async function runCollectionCycle(): Promise<void> {
     const phase = getCollectionPhase();
-    console.log(`[Collector] Running cycle (phase: ${phase})`);
+    cycleCount++;
+    console.log(`[Collector] Running cycle #${cycleCount} (phase: ${phase})`);
 
     try {
-        // Strategy: Alternate between full fetch and division-level fetches
-        if (apiCallsToday % 3 === 0) {
-            // Every 3rd call: full results fetch
-            await fetchAndProcessAll();
-        } else {
-            // Division-level fetches (2 divisions at a time to save API quota)
-            const divisionIdx = (apiCallsToday % 4) * 2;
-            const divisions = DIVISIONS.filter((_, i) => i >= divisionIdx && i < divisionIdx + 2);
-            for (const div of divisions) {
-                await fetchAndProcessDivision(div);
-            }
+        // Strategy: Alternate between result fetching and news collection
+        if (cycleCount % 3 === 0) {
+            // Every 3rd cycle: collect news automatically
+            console.log('[Collector] News collection cycle');
+            const newsResult = await collectNews();
+            console.log(`[Collector] News: ${newsResult.message}`);
         }
+
+        // Always fetch results from multiple sources (2 sources per cycle, rotating)
+        const sourcesToFetch = phase === 'peak_results' ? 3 : 2;
+        apiCallsToday += sourcesToFetch;
+
+        const sourceResults = await fetchFromMultipleSources(sourcesToFetch);
+
+        if (sourceResults.length > 0) {
+            // Process through conflict resolver
+            const processResult = await processMultiSourceResults(sourceResults);
+            console.log(`[Collector] Processed: ${processResult.updated} updated, ${processResult.conflicts} conflicts, ${processResult.skipped} skipped`);
+
+            // Update declared seats from processed data
+            const latest = await getConstituencies();
+            declaredSeats.clear();
+            latest.forEach(c => {
+                if (c.status === 'declared' || c.status === 'result_confirmed') {
+                    declaredSeats.add(c.id);
+                }
+            });
+        }
+
+        // Update election summary
+        await updateElectionSummary();
+
+        // Sync source states to Firestore for admin monitoring
+        await updateSourceStatuses(getAllSourceStates());
+
+        // Sync system status
+        const newsStats = getNewsCollectorStats();
+        const sourceSummary = getSourceSummary();
 
         await updateSystemStatus({
             lastFetchTime: Date.now(),
@@ -147,106 +175,15 @@ async function runCollectionCycle(): Promise<void> {
             collectionPhase: phase,
             seatsDeclared: declaredSeats.size,
             seatsTotal: 300,
+            activeSources: sourceSummary.activeSources,
+            totalConflicts: sourceSummary.totalErrors, // Proxy for now
+            autoNewsCount: newsStats.totalAutoFetched,
         });
 
     } catch (error) {
         errorsToday++;
         console.error('[Collector] Cycle error:', error);
     }
-}
-
-async function fetchAndProcessAll(): Promise<void> {
-    apiCallsToday++;
-    const data = await fetchElectionResults();
-    if (!data || !data.results.length) return;
-    await processResults(data);
-}
-
-async function fetchAndProcessDivision(division: string): Promise<void> {
-    apiCallsToday++;
-    const data = await fetchDivisionResults(division);
-    if (!data || !data.results.length) return;
-    await processResults(data);
-}
-
-async function processResults(data: GeminiResult): Promise<void> {
-    const existingConstituencies = await getConstituencies();
-    const existingMap = new Map(existingConstituencies.map((c: any) => [c.number, c]));
-
-    for (const result of data.results) {
-        try {
-            const existing = existingMap.get(result.constituencyNumber) || null;
-            const { score } = calculateTrustScore(
-                result,
-                existing,
-                data.sourcesUsed || [],
-                data.confidenceLevel || 'medium'
-            );
-
-            const candidates: Candidate[] = (result.candidates || []).map(c => ({
-                name: c.name,
-                party: c.partyId || 'others',
-                votes: c.votes || 0,
-                isWinner: c.isWinner || false,
-                isLeading: c.isLeading || false,
-            }));
-
-            const constituencyId = `constituency-${result.constituencyNumber}`;
-            const status = (result.status as ConstituencyStatus) || 'counting';
-
-            if (shouldAutoPublish(score)) {
-                await updateConstituency(constituencyId, {
-                    name: result.constituencyName,
-                    number: result.constituencyNumber,
-                    division: result.division,
-                    district: result.district || '',
-                    candidates,
-                    status,
-                    totalVotes: result.totalVotes || 0,
-                    winMargin: result.winMargin || 0,
-                    trustScore: score,
-                    source: (data.sourcesUsed || []).join(', '),
-                });
-
-                if (status === 'declared' || status === 'result_confirmed') {
-                    declaredSeats.add(constituencyId);
-                }
-            }
-
-            // Always add an update entry
-            const existingLeader = existing?.candidates.find((c: any) => c.isLeading || c.isWinner);
-            const newLeader = candidates.find(c => c.isLeading || c.isWinner);
-
-            const isLeadChange = existingLeader && newLeader && existingLeader.party !== newLeader.party;
-
-            // Safe Access for message formatting
-            const winnerInfo = candidates.find(c => c.isWinner || c.isLeading);
-            let message = `${result.constituencyName}: Counting in progress`;
-            if (status === 'declared' && winnerInfo) {
-                message = `${result.constituencyName}: ${winnerInfo.name} (${winnerInfo.party}) wins with ${winnerInfo.votes?.toLocaleString()} votes`;
-            } else if (winnerInfo) {
-                message = `${result.constituencyName}: ${winnerInfo.name} (${winnerInfo.party}) leading with ${winnerInfo.votes?.toLocaleString()} votes`;
-            }
-
-            await addUpdate({
-                constituencyId,
-                constituencyName: result.constituencyName,
-                timestamp: Date.now(),
-                type: status === 'declared' ? 'result_declared' :
-                    isLeadChange ? 'lead_change' : 'vote_update',
-                message,
-                trustScore: score,
-                source: (data.sourcesUsed || []).join(', '),
-                isVerified: shouldAutoPublish(score),
-            });
-
-        } catch (error) {
-            console.error(`[Collector] Error processing constituency ${result.constituencyNumber}:`, error);
-        }
-    }
-
-    // Update summary
-    await updateElectionSummary();
 }
 
 async function updateElectionSummary(): Promise<void> {
@@ -319,14 +256,27 @@ async function updateElectionSummary(): Promise<void> {
 
 export async function manualFetch(): Promise<{ success: boolean; message: string }> {
     try {
-        await fetchAndProcessAll();
-        return { success: true, message: 'Fetch completed successfully' };
+        const sourceResults = await fetchFromMultipleSources(3);
+        if (sourceResults.length === 0) {
+            return { success: false, message: 'No sources returned data' };
+        }
+
+        const result = await processMultiSourceResults(sourceResults);
+        await updateElectionSummary();
+        await updateSourceStatuses(getAllSourceStates());
+
+        return {
+            success: true,
+            message: `Fetched from ${sourceResults.length} sources: ${result.updated} updated, ${result.conflicts} conflicts, ${result.skipped} skipped`
+        };
     } catch (error) {
         return { success: false, message: `Fetch failed: ${error}` };
     }
 }
 
 export function getCollectorStats() {
+    const sourceSummary = getSourceSummary();
+    const newsStats = getNewsCollectorStats();
     return {
         apiCallsToday,
         errorsToday,
@@ -334,5 +284,8 @@ export function getCollectorStats() {
         phase: getCollectionPhase(),
         isActive: isCollectionActive(),
         interval: getIntervalMs(),
+        cycleCount,
+        sources: sourceSummary,
+        news: newsStats,
     };
 }
