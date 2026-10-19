@@ -1,29 +1,23 @@
-# BD Election 2026 — Live Results 🇧🇩
+# BD Election 2026: live results
 
 Real-time election results tracker for Bangladesh's **13th National Parliament Election** (February 12, 2026).
 
-![Dashboard Preview](https://img.shields.io/badge/Status-Live-red?style=for-the-badge)
-![React](https://img.shields.io/badge/React-18-blue?style=flat-square&logo=react)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?style=flat-square&logo=typescript)
-![Firebase](https://img.shields.io/badge/Firebase-Firestore-orange?style=flat-square&logo=firebase)
-![AI](https://img.shields.io/badge/Gemini_AI-Powered-purple?style=flat-square&logo=google)
+**Live:** https://iamarif.me/bd-election-2026/
 
 ## Overview
 
-A minimalist, real-time election tracker inspired by India's ECI portal. Since Bangladesh has no official election results API, this app uses **AI-powered data collection** from news sources with a multi-factor trust verification system.
+A results tracker modelled on India's ECI results portal. Bangladesh publishes no official results API, so the app collects results from news reports with Gemini 2.5 Flash-Lite and Google Search grounding, then scores each result from 0 to 100 on several checks before showing it.
 
 ### Features
 
-- 📊 **Live Dashboard** — Real-time seats declared, party standings, and vote counts
-- 🏛️ **Party Scoreboard** — Visual bar chart showing seats won/leading by party
-- 📡 **Live Ticker** — Auto-updating feed of constituency declarations
-- 🗺️ **Interactive Division Map** — SVG Bangladesh map colored by winning party
-- 📱 **Mobile Quick Actions** — Floating Action Button (FAB) for fast navigation
-- 📜 **Historical Context** — Dedicated banner for the 2024 Monsoon Revolution context
-- 🔍 **Constituency Search** — Filter by division, status, or name
-- 🤖 **AI Data Collection** — Gemini 2.5 Flash-Lite with Google Search grounding
-- 🛡️ **Trust Score System** — Multi-factor verification (0-100) for data quality
-- ⚙️ **Admin Panel** — Monitor AI accuracy, review queue, manual corrections
+- Dashboard with seats declared, party standings and vote counts, updating live
+- Party scoreboard as a bar chart of seats won and leading
+- Ticker of constituency declarations as they come in
+- SVG map of Bangladesh's divisions coloured by the leading party
+- Constituency search by division, status or name
+- A banner with context on the 2024 Monsoon Revolution
+- Floating action button for quick navigation on phones
+- Admin panel to review low-scoring results, correct them by hand and track how accurate the AI collection is
 
 ## Tech Stack
 
@@ -67,7 +61,7 @@ npm run build
 
 ## Data Collection Strategy
 
-The AI collection engine is **dormant during voting** and activates after polls close:
+Collection stays off while voting is open and starts once polls close:
 
 | Phase | Frequency |
 |-------|-----------|
@@ -95,8 +89,4 @@ src/
 
 ## License
 
-MIT
-
----
-
-Built with ❤️ by [Arif](https://iamarif.me/portfolio) • Powered by Gemini AI + Firebase
+[MIT](LICENSE)
