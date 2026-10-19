@@ -2,7 +2,7 @@
 
 Real-time election results tracker for Bangladesh's **13th National Parliament Election** (February 12, 2026).
 
-**Live:** https://iamarif.me/bd-election-2026/
+**Live:** https://arif481.github.io/bd-election-2026/
 
 ## Overview
 
