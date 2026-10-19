@@ -4,7 +4,7 @@ export function DeveloperCredit() {
             <p className="dev-credit-text">
                 🛠️ Built with ❤️ by{' '}
                 <a
-                    href="https://iamarif.me/portfolio"
+                    href="https://arif481.github.io/portfolio/"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="dev-credit-name"
@@ -25,7 +25,7 @@ export function DeveloperCredit() {
                 <a href="https://instagram.com/arif.escaped" target="_blank" rel="noopener noreferrer" className="dev-link">
                     Instagram
                 </a>
-                <a href="https://iamarif.me/portfolio" target="_blank" rel="noopener noreferrer" className="dev-link">
+                <a href="https://arif481.github.io/portfolio/" target="_blank" rel="noopener noreferrer" className="dev-link">
                     Portfolio
                 </a>
             </div>
